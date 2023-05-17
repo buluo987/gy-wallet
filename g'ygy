@@ -1,0 +1,112 @@
+script {
+    use 0x1::Crypto;
+
+    public fun deposit(amount: u64, sender: address): bool {
+        // Verify that the transaction was sent from a valid account.
+        assert(copy(sender) == move(tx.origin));
+
+        // Calculate the hash of the sender's public key.
+        let hash = Crypto::hash(move(tx.sender));
+
+        // Store the encrypted amount in the sender's account.
+        move_to<Account>(move(hash)).deposit(move(amount), move(tx.sender));
+
+        return true;
+    }
+
+    public fun withdraw(amount: u64): bool {
+        // Calculate the hash of the sender's public key.
+        let hash = Crypto::hash(move(tx.sender));
+
+        // Retrieve the sender's account and decrypt the amount.
+        let account = move_from<Account>(move(hash));
+        let decrypted_amount = account.withdraw(move(amount), move(tx.sender));
+
+        // Transfer the decrypted amount to the sender's address.
+        move_to<Address>(move(tx.origin)).deposit(move(decrypted_amount));
+
+        return true;
+    }
+}
+
+module Account {
+    struct Account {
+        encrypted_balance: vector<u8>,
+        nonce: u64,
+    }
+
+    public fun deposit(amount: u64, sender: address): void {
+        let nonce = Self::get_nonce(sender);
+        let encrypted_amount = Crypto::encrypt(move(amount), move(sender), nonce);
+
+        Self::set_balance(move(sender), move(encrypted_amount));
+        Self::increment_nonce(move(sender));
+    }
+
+    public fun withdraw(amount: u64, sender: address): u64 {
+        let nonce = Self::get_nonce(sender);
+        let encrypted_balance = Self::get_balance(sender);
+        let decrypted_balance = Crypto::decrypt(move(encrypted_balance), move(sender), nonce);
+
+        assert(move(amount) <= decrypted_balance);
+
+        let encrypted_amount = Crypto::encrypt(move(amount), move(sender), nonce);
+        let remaining_balance = decrypted_balance - move(amount);
+        let encrypted_balance = Crypto::encrypt(move(remaining_balance), move(sender), nonce);
+
+        Self::set_balance(move(sender), move(encrypted_balance));
+        Self::increment_nonce(move(sender));
+
+        return move(decrypted_balance);
+    }
+
+    private fun get_nonce(address: address): u64 {
+        let key = get_key(address, "nonce");
+        let nonce = match move_from<Option<u64>>(move(key)) {
+            Some(value) => value,
+            None => 0,
+        };
+
+        return move(nonce);
+    }
+
+    private fun set_balance(address: address, balance: vector<u8>): void {
+        move_to<Balance>(move(address)).set(move(balance));
+    }
+
+    private fun get_balance(address: address): vector<u8> {
+        return move_from<Balance>(move(address)).get();
+    }
+
+    private fun increment_nonce(address: address): void {
+        let key = get_key(address, "nonce");
+        let nonce = Self::get_nonce(address) + 1;
+        move_to<Option<u64>>(move(key)).set(move(nonce));
+    }
+
+    private fun get_key(address: address, name: &str): vector<u8> {
+        let mut key = move(address).to_bytes();
+        key.extend_from_slice(name.as_bytes());
+        return move(key);
+    }
+}
+
+module Balance {
+    struct Balance {
+        value: vector<u8>,
+    }
+
+    public fun set(value: vector<u8>): void {
+        Self::check_owner();
+        Self::value().set(move(value));
+    }
+
+    public fun get(): vector<u8> {
+        Self::check_owner();
+        return move(Self::value().get());
+    }
+
+    private fun check_owner(): void {
+        assert(copy(move(tx.origin)) == 0x0);
+    }
+}
